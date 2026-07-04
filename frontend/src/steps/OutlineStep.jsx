@@ -12,33 +12,74 @@ const LAYOUT_HINTS = [
   'closing',
 ]
 
-export default function OutlineStep({ projectId, outline, onOutlineChange }) {
+// 清單可重排／可刪除，不能用陣列 index 當 React key：載入時補一個前端
+// 專用的穩定 id（_cid）。送 PUT 前會剝掉（後端 schema 沒有此欄位）。
+function withClientIds(outline) {
+  return {
+    ...outline,
+    slides: outline.slides.map((s) =>
+      s._cid ? s : { ...s, _cid: crypto.randomUUID() }
+    ),
+  }
+}
+
+function toPutPayload(outline) {
+  return {
+    slides: outline.slides.map((slide) => {
+      const { _cid: _ignored, ...rest } = slide
+      return {
+        ...rest,
+        bullets: (rest.bullets || []).map((b) => b.trim()).filter(Boolean),
+      }
+    }),
+  }
+}
+
+export default function OutlineStep({
+  projectId,
+  outline,
+  onOutlineChange,
+  saved,
+  onSavedChange,
+}) {
   const [loading, setLoading] = useState(false)
   const [genError, setGenError] = useState(null)
   const [saveError, setSaveError] = useState(null)
   const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
 
   useEffect(() => {
     if (outline || !projectId) return
+    let cancelled = false
     setLoading(true)
     setGenError(null)
     genOutline(projectId)
-      .then((data) => onOutlineChange(data))
-      .catch((err) => setGenError(err.message))
-      .finally(() => setLoading(false))
-  }, [projectId, outline, onOutlineChange])
+      .then((data) => {
+        if (cancelled) return
+        onOutlineChange(withClientIds(data))
+        // genOutline 由後端生成並落地，視為已儲存。
+        onSavedChange(true)
+      })
+      .catch((err) => {
+        if (!cancelled) setGenError(err.message)
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [projectId, outline, onOutlineChange, onSavedChange])
 
   function updateSlide(index, patch) {
     const slides = outline.slides.map((s, i) => (i === index ? { ...s, ...patch } : s))
     onOutlineChange({ ...outline, slides })
-    setSaved(false)
+    onSavedChange(false)
   }
 
   function removeSlide(index) {
     const slides = outline.slides.filter((_, i) => i !== index)
     onOutlineChange({ ...outline, slides })
-    setSaved(false)
+    onSavedChange(false)
   }
 
   function moveSlide(index, dir) {
@@ -47,17 +88,25 @@ export default function OutlineStep({ projectId, outline, onOutlineChange }) {
     const slides = [...outline.slides]
     ;[slides[index], slides[target]] = [slides[target], slides[index]]
     onOutlineChange({ ...outline, slides })
-    setSaved(false)
+    onSavedChange(false)
   }
 
   async function handleSave() {
     setSaving(true)
     setSaveError(null)
-    setSaved(false)
     try {
-      const result = await putOutline(projectId, outline)
-      onOutlineChange(result)
-      setSaved(true)
+      const result = await putOutline(projectId, toPutPayload(outline))
+      // 後端依陣列順序重編 index、不回傳 _cid：按位置把原 _cid 接回，
+      // 維持 key 穩定（PUT 不會改變頁面順序）。
+      const merged = {
+        ...result,
+        slides: result.slides.map((s, i) => ({
+          ...s,
+          _cid: outline.slides[i]?._cid ?? crypto.randomUUID(),
+        })),
+      }
+      onOutlineChange(merged)
+      onSavedChange(true)
     } catch (err) {
       setSaveError(err.message)
     } finally {
@@ -70,8 +119,8 @@ export default function OutlineStep({ projectId, outline, onOutlineChange }) {
     setGenError(null)
     try {
       const data = await genOutline(projectId)
-      onOutlineChange(data)
-      setSaved(false)
+      onOutlineChange(withClientIds(data))
+      onSavedChange(true)
     } catch (err) {
       setGenError(err.message)
     } finally {
@@ -98,7 +147,7 @@ export default function OutlineStep({ projectId, outline, onOutlineChange }) {
 
       <ul className="outline-list">
         {outline.slides.map((slide, i) => (
-          <li key={i} className="outline-item">
+          <li key={slide._cid ?? i} className="outline-item">
             <div className="outline-item-header">
               <span className="outline-index">第 {i + 1} 頁</span>
               <div className="outline-item-actions">

@@ -3,20 +3,15 @@ import { generate, getProgress } from '../api'
 
 const POLL_INTERVAL_MS = 2000
 
-export default function PreviewStep({ projectId, outline }) {
+export default function PreviewStep({ projectId, outline, onStageChange }) {
   const [stage, setStage] = useState(null)
   const [slides, setSlides] = useState([])
   const [lastError, setLastError] = useState(null)
+  const [loaded, setLoaded] = useState(false)
   const [starting, setStarting] = useState(false)
   const [startError, setStartError] = useState(null)
   const [modalIndex, setModalIndex] = useState(null)
   const timerRef = useRef(null)
-
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current)
-    }
-  }, [])
 
   function stopPolling() {
     if (timerRef.current) {
@@ -25,12 +20,17 @@ export default function PreviewStep({ projectId, outline }) {
     }
   }
 
+  function applyProgress(progress) {
+    setStage(progress.stage)
+    onStageChange?.(progress.stage)
+    setSlides(progress.slides || [])
+    setLastError(progress.last_error || null)
+  }
+
   async function pollOnce() {
     try {
       const progress = await getProgress(projectId)
-      setStage(progress.stage)
-      setSlides(progress.slides || [])
-      setLastError(progress.last_error || null)
+      applyProgress(progress)
 
       if (progress.stage === 'outline' && progress.last_error) {
         // 生成失敗，後端已把 stage 退回 outline：停止輪詢，等使用者重試。
@@ -44,13 +44,39 @@ export default function PreviewStep({ projectId, outline }) {
     }
   }
 
+  // 掛載時先讀一次進度：若生成仍在進行（例如使用者切到別步再回來、或
+  // 頁面重載），自動恢復輪詢；若已完成則直接顯示縮圖格。
+  useEffect(() => {
+    let cancelled = false
+    getProgress(projectId)
+      .then((progress) => {
+        if (cancelled) return
+        applyProgress(progress)
+        setLoaded(true)
+        if (progress.stage === 'generating') {
+          timerRef.current = setInterval(pollOnce, POLL_INTERVAL_MS)
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setStartError(err.message)
+        setLoaded(true)
+      })
+    return () => {
+      cancelled = true
+      stopPolling()
+    }
+    // 掛載時執行一次即可；pollOnce/applyProgress 為元件內函式，依賴僅 projectId。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId])
+
   async function handleStart() {
     setStarting(true)
     setStartError(null)
     stopPolling()
     try {
       await generate(projectId)
-      // 立即刷新一次，再啟動輪詢；輪詢本身會在 stage 到達終態時自行停止。
+      // 先啟動輪詢再立即刷新一次；pollOnce 在 stage 到達終態時會自行停止。
       timerRef.current = setInterval(pollOnce, POLL_INTERVAL_MS)
       await pollOnce()
     } catch (err) {
@@ -62,13 +88,16 @@ export default function PreviewStep({ projectId, outline }) {
   }
 
   const isGenerating = stage === 'generating'
+  const hasFailure = stage === 'outline' && Boolean(lastError)
   const totalSlides = outline?.slides?.length ?? slides.length
 
   return (
     <section className="step-panel">
       <h2>步驟四：生成預覽</h2>
 
-      {!isGenerating && stage !== 'generated' && (
+      {!loaded && <p className="hint-text">載入進度中…</p>}
+
+      {loaded && !isGenerating && stage !== 'generated' && !hasFailure && (
         <button type="button" className="btn btn-primary" onClick={handleStart} disabled={starting}>
           {starting ? '啟動中…' : '開始生成'}
         </button>
@@ -76,7 +105,7 @@ export default function PreviewStep({ projectId, outline }) {
 
       {startError && <p className="error-text">{startError}</p>}
 
-      {stage === 'outline' && lastError && (
+      {hasFailure && (
         <div className="card error-card">
           <p className="error-text">生成失敗：{lastError}</p>
           <button type="button" className="btn btn-primary" onClick={handleStart} disabled={starting}>

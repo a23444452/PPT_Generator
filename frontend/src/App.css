@@ -84,6 +84,12 @@
   margin-top: 24px;
 }
 
+.footer-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .step-panel {
   background: #fff;
   border: 1px solid #e2e5ea;

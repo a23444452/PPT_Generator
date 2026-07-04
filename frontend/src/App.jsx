@@ -14,12 +14,19 @@ function App() {
   const [styleId, setStyleId] = useState(null)
   const [paletteId, setPaletteId] = useState(null)
   const [outline, setOutline] = useState(null)
+  // 大綱是否已與後端同步：genOutline／PUT 成功即 true（兩者皆已落地），
+  // 任何本地編輯轉 false；未儲存不得進入生成步驟。
+  const [outlineSaved, setOutlineSaved] = useState(false)
+  // 生成階段（由 PreviewStep 輪詢回報）：generated 才能進入匯出步驟。
+  const [previewStage, setPreviewStage] = useState(null)
 
   const canGoNext = {
     1: Boolean(projectId),
     2: Boolean(styleId && paletteId),
-    3: Boolean(outline && outline.slides && outline.slides.length > 0),
-    4: true,
+    3: Boolean(
+      outline && outline.slides && outline.slides.length > 0 && outlineSaved
+    ),
+    4: previewStage === 'generated',
     5: false,
   }[step]
 
@@ -72,10 +79,16 @@ function App() {
             projectId={projectId}
             outline={outline}
             onOutlineChange={setOutline}
+            saved={outlineSaved}
+            onSavedChange={setOutlineSaved}
           />
         )}
         {step === 4 && (
-          <PreviewStep projectId={projectId} outline={outline} />
+          <PreviewStep
+            projectId={projectId}
+            outline={outline}
+            onStageChange={setPreviewStage}
+          />
         )}
         {step === 5 && <ExportStep projectId={projectId} />}
       </main>
@@ -89,16 +102,21 @@ function App() {
         >
           上一步
         </button>
-        {step < 5 && (
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={goNext}
-            disabled={!canGoNext}
-          >
-            下一步
-          </button>
-        )}
+        <div className="footer-right">
+          {step === 3 && outline && !outlineSaved && (
+            <span className="hint-text">請先儲存大綱</span>
+          )}
+          {step < 5 && (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={goNext}
+              disabled={!canGoNext}
+            >
+              下一步
+            </button>
+          )}
+        </div>
       </footer>
     </div>
   )
