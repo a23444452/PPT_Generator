@@ -14,11 +14,22 @@ tmp_path，不依賴環境變數。
 import os
 from pathlib import Path
 
+from fastapi import HTTPException
+
 from app.llm.base import LLMProvider
+from app.store.project import Project, ProjectNotFoundError, load_project
 
 
 class ProjectsRootError(Exception):
     """找不到可用的 projects 根目錄（理論上不應發生，定位邏輯有保底）。"""
+
+
+def load_project_or_404(root: Path, project_id: str) -> Project:
+    """載入專案；不存在或損毀時回 404（各 router 共用）。"""
+    try:
+        return load_project(root, project_id)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"找不到專案：{project_id}") from exc
 
 
 def _default_repo_root() -> Path:

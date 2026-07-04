@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from app.api.deps import get_llm, get_projects_root
 from app.llm.base import LLMError
 from app.main import app
+from app.store.project import load_project
 from tests.conftest import FakeLLM
 
 _OUTLINE_JSON = """```json
@@ -30,10 +31,14 @@ def _svg(title: str) -> str:
 
 
 @pytest.fixture
-def client(tmp_path):
-    projects_root = tmp_path / "projects"
-    projects_root.mkdir()
+def projects_root(tmp_path):
+    root = tmp_path / "projects"
+    root.mkdir()
+    return root
 
+
+@pytest.fixture
+def client(projects_root):
     app.dependency_overrides[get_projects_root] = lambda: projects_root
     with TestClient(app) as c:
         yield c
@@ -173,23 +178,41 @@ def test_full_happy_path(client):
     assert len(resp.content) > 0
 
 
-def test_generate_llm_error_recorded_in_progress(client):
-    resp = client.post("/api/projects", json={"name": "LLM 失敗測試"})
+def _setup_project_with_outline(client, name: str) -> str:
+    """建專案→上傳 md→選風格→產生 outline（FakeLLM），回傳 project_id。"""
+    resp = client.post("/api/projects", json={"name": name})
     project_id = resp.json()["id"]
 
     files = {"files": ("source.md", io.BytesIO("# 標題\n內容".encode("utf-8")), "text/markdown")}
     client.post(f"/api/projects/{project_id}/upload", files=files)
 
     styles = client.get("/api/styles").json()
-    style_id = styles["styles"][0]["id"]
-    palette_id = styles["palettes"][0]["id"]
     client.post(
         f"/api/projects/{project_id}/style",
-        json={"style_id": style_id, "palette_id": palette_id},
+        json={
+            "style_id": styles["styles"][0]["id"],
+            "palette_id": styles["palettes"][0]["id"],
+        },
     )
 
     _override_llm([_OUTLINE_JSON])
-    client.post(f"/api/projects/{project_id}/outline")
+    resp = client.post(f"/api/projects/{project_id}/outline")
+    assert resp.status_code == 200, resp.text
+    return project_id
+
+
+def _poll_last_error(client, project_id, timeout=5.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        progress = client.get(f"/api/projects/{project_id}/progress").json()
+        if progress.get("last_error"):
+            return progress
+        time.sleep(0.02)
+    raise AssertionError("last_error was never reported")
+
+
+def test_generate_llm_error_recorded_in_progress(client):
+    project_id = _setup_project_with_outline(client, "LLM 失敗測試")
 
     class _FailingLLM:
         def complete(self, messages, system="", max_tokens=4096):
@@ -199,16 +222,63 @@ def test_generate_llm_error_recorded_in_progress(client):
     resp = client.post(f"/api/projects/{project_id}/generate")
     assert resp.status_code == 202
 
-    deadline = time.time() + 5.0
-    last_error = None
-    while time.time() < deadline:
-        progress = client.get(f"/api/projects/{project_id}/progress").json()
-        last_error = progress.get("last_error")
-        if last_error:
-            break
-        time.sleep(0.02)
+    progress = _poll_last_error(client, project_id)
+    assert progress["last_error"] == "無法連線至 LLM 服務"
+    # 失敗後 stage 回復 outline，讓使用者可修正後重試
+    assert progress["stage"] == "outline"
 
-    assert last_error == "無法連線至 LLM 服務"
+
+def test_generate_unexpected_error_recorded_in_progress(client):
+    project_id = _setup_project_with_outline(client, "非預期錯誤測試")
+
+    class _ExplodingLLM:
+        def complete(self, messages, system="", max_tokens=4096):
+            raise ValueError("內部爆炸，非 LLMError")
+
+    app.dependency_overrides[get_llm] = lambda: _ExplodingLLM()
+    resp = client.post(f"/api/projects/{project_id}/generate")
+    assert resp.status_code == 202
+
+    progress = _poll_last_error(client, project_id)
+    assert progress["last_error"] == "生成過程發生未預期錯誤"
+    assert progress["stage"] == "outline"
+
+
+def test_generate_conflict_while_generating_409(client, projects_root):
+    project_id = _setup_project_with_outline(client, "併發生成測試")
+
+    # 模擬生成進行中：直接把 stage 寫成 generating（背景任務在 TestClient
+    # 下與回應同步完成，無法靠真的併發請求製造這個狀態）。
+    project = load_project(projects_root, project_id)
+    project.data["stage"] = "generating"
+    project.save()
+
+    resp = client.post(f"/api/projects/{project_id}/generate")
+    assert resp.status_code == 409
+    assert "生成進行中" in resp.json()["detail"]
+
+
+def test_put_outline_conflict_while_generating_409(client, projects_root):
+    project_id = _setup_project_with_outline(client, "生成中編輯測試")
+
+    project = load_project(projects_root, project_id)
+    project.data["stage"] = "generating"
+    project.save()
+
+    edited = {
+        "slides": [
+            {
+                "index": 0,
+                "title": "編輯",
+                "bullets": [],
+                "layout_hint": "cover",
+                "assets": [],
+            }
+        ]
+    }
+    resp = client.put(f"/api/projects/{project_id}/outline", json=edited)
+    assert resp.status_code == 409
+    assert "生成進行中" in resp.json()["detail"]
 
 
 # ---------- 錯誤情境 ----------
@@ -217,6 +287,11 @@ def test_generate_llm_error_recorded_in_progress(client):
 def test_create_project_missing_name_422(client):
     resp = client.post("/api/projects", json={})
     assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    # 全域 RequestValidationError handler：統一中文格式、附欄位路徑
+    assert isinstance(detail, str)
+    assert detail.startswith("請求格式錯誤：")
+    assert "name" in detail
 
 
 def test_project_not_found_404(client):
@@ -225,7 +300,7 @@ def test_project_not_found_404(client):
     assert "detail" in resp.json()
 
 
-def test_upload_bad_extension_422(client):
+def test_upload_bad_extension_reports_failure_per_file(client):
     resp = client.post("/api/projects", json={"name": "壞副檔名"})
     project_id = resp.json()["id"]
 
@@ -234,7 +309,7 @@ def test_upload_bad_extension_422(client):
     assert resp.status_code == 200  # 逐檔回報，整體請求成功
     result = resp.json()["results"][0]
     assert result["success"] is False
-    assert "detail" not in result or True  # 訊息在 error 欄位即可
+    assert result["error"]  # 友善錯誤訊息在 error 欄位
 
 
 def test_upload_file_too_large_413(client):

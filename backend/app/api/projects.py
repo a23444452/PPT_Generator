@@ -1,6 +1,7 @@
 """專案生命週期路由：建立／清單／上傳／風格／outline／生成／進度／slide SVG。"""
 
 import json
+import logging
 import os
 from pathlib import Path
 from uuid import uuid4
@@ -8,12 +9,14 @@ from uuid import uuid4
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, UploadFile
 from pydantic import BaseModel, Field
 
-from app.api.deps import get_llm, get_projects_root
+from app.api.deps import get_llm, get_projects_root, load_project_or_404
 from app.generation import OutlineError, generate_outline, generate_slides, validate_outline
 from app.ingest import IngestError, ingest_file
 from app.llm.base import LLMError, LLMProvider
 from app.store.project import Project, ProjectNotFoundError, create_project, list_projects, load_project
 from app.styles.catalog import StyleCatalogError, load_palette, load_style
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["projects"])
 
@@ -59,13 +62,6 @@ class OutlinePayload(BaseModel):
 # ---------- 共用輔助 ----------
 
 
-def _load_or_404(root: Path, project_id: str) -> Project:
-    try:
-        return load_project(root, project_id)
-    except ProjectNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=f"找不到專案：{project_id}") from exc
-
-
 def _project_detail(project: Project) -> dict:
     return {
         "id": project.data["id"],
@@ -107,7 +103,7 @@ def list_projects_endpoint(root: Path = Depends(get_projects_root)) -> list[dict
 
 @router.get("/projects/{project_id}")
 def get_project_endpoint(project_id: str, root: Path = Depends(get_projects_root)) -> dict:
-    project = _load_or_404(root, project_id)
+    project = load_project_or_404(root, project_id)
     return _project_detail(project)
 
 
@@ -120,7 +116,7 @@ async def upload_files_endpoint(
     files: list[UploadFile],
     root: Path = Depends(get_projects_root),
 ) -> dict:
-    project = _load_or_404(root, project_id)
+    project = load_project_or_404(root, project_id)
     source_dir = project.path / "source"
     source_dir.mkdir(parents=True, exist_ok=True)
 
@@ -180,7 +176,7 @@ def select_style_endpoint(
     payload: StyleSelectionRequest,
     root: Path = Depends(get_projects_root),
 ) -> dict:
-    project = _load_or_404(root, project_id)
+    project = load_project_or_404(root, project_id)
 
     try:
         load_style(payload.style_id)
@@ -205,7 +201,7 @@ def generate_outline_endpoint(
     root: Path = Depends(get_projects_root),
     llm: LLMProvider = Depends(get_llm),
 ) -> dict:
-    project = _load_or_404(root, project_id)
+    project = load_project_or_404(root, project_id)
 
     style_id = project.data.get("style_id")
     palette_id = project.data.get("palette_id")
@@ -228,7 +224,9 @@ def update_outline_endpoint(
     payload: OutlinePayload,
     root: Path = Depends(get_projects_root),
 ) -> dict:
-    project = _load_or_404(root, project_id)
+    project = load_project_or_404(root, project_id)
+    if project.data["stage"] == "generating":
+        raise HTTPException(status_code=409, detail="生成進行中，無法編輯大綱")
 
     assets_dir = project.path / "assets"
     asset_names = (
@@ -277,7 +275,11 @@ def _write_outline_files(project_path: Path, outline: dict) -> None:
 
 
 def _run_generation(project_id: str, root: Path, llm: LLMProvider) -> None:
-    """背景任務進入點：捕捉 LLMError 寫入 project.json，讓 progress 端點可回報。"""
+    """背景任務進入點：任何例外都要落地成 last_error，讓 progress 端點可回報。
+
+    裸拋只會進 log，前端輪詢會永遠卡在 generating。失敗時把 stage 回復
+    為 outline，讓使用者可修正（如重新編輯大綱、檢查金鑰）後重試。
+    """
     try:
         project = load_project(root, project_id)
     except ProjectNotFoundError:
@@ -286,8 +288,20 @@ def _run_generation(project_id: str, root: Path, llm: LLMProvider) -> None:
     try:
         generate_slides(llm, project)
     except LLMError as exc:
-        project.data["last_error"] = _friendly_llm_message(exc)
+        _record_generation_failure(project, _friendly_llm_message(exc))
+    except Exception:  # noqa: BLE001 — 兜底：outline 損毀、風格目錄錯誤、磁碟 IO 等
+        logger.exception("生成背景任務發生未預期錯誤（project=%s）", project_id)
+        _record_generation_failure(project, "生成過程發生未預期錯誤")
+
+
+def _record_generation_failure(project: Project, message: str) -> None:
+    project.data["last_error"] = message
+    project.data["stage"] = "outline"
+    try:
         project.save()
+    except OSError:
+        # save 本身失敗只能進 log；此時磁碟已有問題，無法再寫入任何狀態。
+        logger.exception("寫入生成失敗狀態時發生 IO 錯誤（project=%s）", project.id)
 
 
 @router.post("/projects/{project_id}/generate", status_code=202)
@@ -297,8 +311,12 @@ def start_generate_endpoint(
     root: Path = Depends(get_projects_root),
     llm: LLMProvider = Depends(get_llm),
 ) -> dict:
-    project = _load_or_404(root, project_id)
+    project = load_project_or_404(root, project_id)
+    if project.data["stage"] == "generating":
+        raise HTTPException(status_code=409, detail="生成進行中，請等待完成")
+
     project.data["last_error"] = None
+    project.data["stage"] = "generating"
     project.save()
 
     background_tasks.add_task(_run_generation, project_id, root, llm)
@@ -307,7 +325,7 @@ def start_generate_endpoint(
 
 @router.get("/projects/{project_id}/progress")
 def get_progress_endpoint(project_id: str, root: Path = Depends(get_projects_root)) -> dict:
-    project = _load_or_404(root, project_id)
+    project = load_project_or_404(root, project_id)
     return {
         "stage": project.data["stage"],
         "slides": project.data.get("slides", []),
@@ -322,7 +340,7 @@ def get_progress_endpoint(project_id: str, root: Path = Depends(get_projects_roo
 def get_slide_svg_endpoint(
     project_id: str, index: int, root: Path = Depends(get_projects_root)
 ) -> Response:
-    project = _load_or_404(root, project_id)
+    project = load_project_or_404(root, project_id)
     svg_path = project.path / "svg_output" / f"slide_{index:03d}.svg"
     if not svg_path.is_file():
         raise HTTPException(status_code=404, detail=f"找不到第 {index} 頁的 SVG")

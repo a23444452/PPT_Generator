@@ -1,7 +1,9 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api import router as api_router
 from app.api.deps import get_llm
@@ -53,6 +55,22 @@ app.add_middleware(
 )
 
 app.include_router(api_router)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """統一 422 錯誤格式：detail 一律是友善中文字串（含欄位路徑），
+    而非 FastAPI 預設的英文 error dict 清單。
+    """
+    errors = exc.errors()
+    if errors:
+        loc = ".".join(str(part) for part in errors[0].get("loc", ()))
+        detail = f"請求格式錯誤：{loc}" if loc else "請求格式錯誤"
+    else:
+        detail = "請求格式錯誤"
+    return JSONResponse(status_code=422, content={"detail": detail})
 
 
 @app.get("/api/health")

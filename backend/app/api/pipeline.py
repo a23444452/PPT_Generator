@@ -5,8 +5,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
-from app.api.deps import get_projects_root
-from app.api.projects import _load_or_404
+from app.api.deps import get_projects_root, load_project_or_404
 from app.export import ExportError, export_pptx
 from app.styles.catalog import StyleCatalogError, list_palettes, list_styles
 
@@ -28,7 +27,7 @@ def list_styles_endpoint() -> dict:
 def export_project_endpoint(
     project_id: str, root: Path = Depends(get_projects_root)
 ) -> dict:
-    project = _load_or_404(root, project_id)
+    project = load_project_or_404(root, project_id)
 
     try:
         result = export_pptx(project)
@@ -48,7 +47,7 @@ def export_project_endpoint(
 def download_export_endpoint(
     project_id: str, filename: str, root: Path = Depends(get_projects_root)
 ) -> FileResponse:
-    project = _load_or_404(root, project_id)
+    project = load_project_or_404(root, project_id)
 
     # 防路徑逃逸：filename 必須是純檔名（無分隔符），且 resolve 後仍在
     # exports/ 之下——雙重防護，前者擋掉大多數 traversal payload，
