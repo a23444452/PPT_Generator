@@ -6,7 +6,9 @@
 """
 
 import json
+import os
 from pathlib import Path
+from uuid import uuid4
 
 from app.llm.base import LLMProvider
 from app.store.project import Project
@@ -26,6 +28,8 @@ LAYOUT_HINTS = (
 _MAX_ATTEMPTS = 2
 _MAX_TOKENS = 8192
 _ERROR_EXCERPT_LEN = 500
+_MAX_SOURCE_CHARS = 80_000
+_TRUNCATION_NOTE = "（來源內容過長，已截斷）"
 
 
 class OutlineError(Exception):
@@ -64,7 +68,7 @@ def generate_outline(
 
         try:
             parsed = _parse_json_response(raw)
-            outline = _validate_outline(parsed, asset_names)
+            outline = validate_outline(parsed, asset_names)
             break
         except OutlineError as exc:
             last_error = str(exc)
@@ -99,7 +103,12 @@ def _collect_md_text(md_dir: Path) -> str:
         parts.append(f"## {path.name}\n\n{text}")
     if not parts:
         return "（無來源文件）"
-    return "\n\n".join(parts)
+
+    combined = "\n\n".join(parts)
+    # 輸入長度上限：避免超長來源撐爆 prompt；截斷後附註記讓 LLM 知情。
+    if len(combined) > _MAX_SOURCE_CHARS:
+        combined = combined[:_MAX_SOURCE_CHARS] + f"\n\n{_TRUNCATION_NOTE}"
+    return combined
 
 
 def _collect_asset_names(assets_dir: Path) -> list[str]:
@@ -171,17 +180,15 @@ def _build_retry_prompt(base_prompt: str, last_raw: str, last_error: str) -> str
 
 
 def _parse_json_response(raw: str) -> dict:
-    """找第一個 ```json fence；找不到則 fallback 找第一個 `{` 到最後一個 `}`。"""
+    """找第一個 ```json fence（主路徑）；找不到則 fallback 前綴解析。"""
     fence_json = _extract_json_fence(raw)
-    candidate = fence_json if fence_json is not None else _extract_brace_fallback(raw)
+    if fence_json is not None:
+        try:
+            return json.loads(fence_json)
+        except json.JSONDecodeError as exc:
+            raise OutlineError(f"JSON 解析失敗：{exc}") from exc
 
-    if candidate is None:
-        raise OutlineError("回應中找不到任何 JSON 內容")
-
-    try:
-        return json.loads(candidate)
-    except json.JSONDecodeError as exc:
-        raise OutlineError(f"JSON 解析失敗：{exc}") from exc
+    return _parse_brace_fallback(raw)
 
 
 def _extract_json_fence(raw: str) -> str | None:
@@ -196,18 +203,32 @@ def _extract_json_fence(raw: str) -> str | None:
     return raw[start:end].strip()
 
 
-def _extract_brace_fallback(raw: str) -> str | None:
+def _parse_brace_fallback(raw: str) -> dict:
+    """保底解析：從第一個 `{` 起用 raw_decode 做前綴解析，吃到合法 JSON 就停。
+
+    fence 是主路徑，這裡只處理 LLM 忘記包 fence 的情況。用 raw_decode 而非
+    find/rfind 貪婪抓取，因此 JSON「後面」的多話不會被誤吞；已知限制：JSON
+    「前面」若有帶花括號的雜訊（第一個 `{` 不是 JSON 的起點）仍會解析失敗。
+    """
     start = raw.find("{")
-    end = raw.rfind("}")
-    if start == -1 or end == -1 or end < start:
-        return None
-    return raw[start : end + 1].strip()
+    if start == -1:
+        raise OutlineError("回應中找不到任何 JSON 內容")
+    try:
+        parsed, _end = json.JSONDecoder().raw_decode(raw[start:])
+    except json.JSONDecodeError as exc:
+        raise OutlineError(f"JSON 解析失敗：{exc}") from exc
+    return parsed
 
 
 # ---------- 驗證 ----------
 
 
-def _validate_outline(parsed: dict, asset_names: list[str]) -> dict:
+def validate_outline(parsed: dict, asset_names: list[str]) -> dict:
+    """驗證大綱結構，回傳正規化後的新 dict（index 依陣列順序重編）。
+
+    公開 API：除了 generate_outline 內部使用外，PUT /outline 也用它驗證
+    使用者手動編輯後的大綱。驗證失敗 raise OutlineError。
+    """
     if not isinstance(parsed, dict):
         raise OutlineError("頂層內容必須是 JSON 物件")
 
@@ -269,13 +290,18 @@ def _validate_outline(parsed: dict, asset_names: list[str]) -> dict:
 
 
 def _write_outline_files(project_path: Path, outline: dict) -> None:
-    outline_json_path = project_path / "outline.json"
-    outline_json_path.write_text(
-        json.dumps(outline, ensure_ascii=False, indent=2), encoding="utf-8"
+    # 原子寫入（tmp 檔 + os.replace），與 Project.save 慣例一致。
+    _atomic_write_text(
+        project_path / "outline.json",
+        json.dumps(outline, ensure_ascii=False, indent=2),
     )
+    _atomic_write_text(project_path / "outline.md", _render_outline_md(outline))
 
-    outline_md_path = project_path / "outline.md"
-    outline_md_path.write_text(_render_outline_md(outline), encoding="utf-8")
+
+def _atomic_write_text(target: Path, text: str) -> None:
+    tmp_path = target.parent / f".{target.name}.{uuid4().hex}.tmp"
+    tmp_path.write_text(text, encoding="utf-8")
+    os.replace(tmp_path, target)
 
 
 def _render_outline_md(outline: dict) -> str:

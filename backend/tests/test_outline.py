@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from app.generation.outline import OutlineError, generate_outline
+from app.generation.outline import OutlineError, generate_outline, validate_outline
 from app.store.project import create_project
 from tests.conftest import FakeLLM
 
@@ -212,3 +212,61 @@ def test_outline_empty_slides_list_is_validation_error(tmp_path):
         generate_outline(llm, project, "swiss-minimal", "cool-corporate")
 
     assert len(llm.calls) == 2
+
+
+def test_outline_fallback_ignores_trailing_text_after_json(tmp_path):
+    """fallback 解析用 raw_decode 前綴解析：JSON 後面跟著多話（甚至含花括號）不會被誤吞。"""
+    project = _make_project(tmp_path)
+    raw = (
+        json.dumps(VALID_OUTLINE, ensure_ascii=False)
+        + "\n\n以上就是大綱，補充說明：{這段} 不是 JSON 的一部分}}"
+    )
+    llm = FakeLLM([raw])
+
+    result = generate_outline(llm, project, "swiss-minimal", "cool-corporate")
+
+    assert result["slides"][0]["title"] == "封面：Q2 營運回顧"
+    assert len(llm.calls) == 1
+
+
+def test_collect_md_text_truncates_overlong_source(tmp_path):
+    """來源 md 超過長度上限時應截斷，且 prompt 內含截斷註記。"""
+    from app.generation.outline import _MAX_SOURCE_CHARS, _TRUNCATION_NOTE
+
+    project = _make_project(tmp_path, with_md=False)
+    (project.path / "md" / "huge.md").write_text(
+        "頭部標記。" + "很長的內容。" * (_MAX_SOURCE_CHARS // 6 + 1000),
+        encoding="utf-8",
+    )
+    llm = FakeLLM([_fence(VALID_OUTLINE)])
+
+    generate_outline(llm, project, "swiss-minimal", "cool-corporate")
+
+    prompt = llm.calls[0]["messages"][0]["content"]
+    assert "頭部標記。" in prompt
+    assert _TRUNCATION_NOTE in prompt
+    # 來源區塊確實被截斷：prompt 總長遠小於原始來源長度
+    huge_len = len((project.path / "md" / "huge.md").read_text(encoding="utf-8"))
+    assert len(prompt) < huge_len
+
+
+# ---------- validate_outline（公開 API，供 PUT /outline 重用） ----------
+
+
+def test_validate_outline_is_public_and_normalizes(tmp_path):
+    outline = {
+        "slides": [
+            {"title": "封面", "bullets": ["a"], "layout_hint": "cover", "assets": []},
+        ]
+    }
+    result = validate_outline(outline, [])
+    assert result["slides"][0]["index"] == 0
+
+    with pytest.raises(OutlineError):
+        validate_outline({"slides": []}, [])
+
+
+def test_validate_outline_exported_from_package():
+    from app.generation import validate_outline as exported
+
+    assert exported is validate_outline
