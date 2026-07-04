@@ -66,14 +66,27 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
 
 
 def _scan_dir(directory: Path) -> dict[str, dict]:
-    """掃描目錄下所有 .md 檔，回傳 {id: {"meta": ..., "body": ...}}。"""
+    """掃描目錄下所有 .md 檔，回傳 {id: {"meta": ..., "body": ...}}。
+
+    解析錯誤訊息帶檔名以便定位；兩個檔案宣告相同 id 時 raise，不靜默覆蓋。
+    """
     entries: dict[str, dict] = {}
+    id_sources: dict[str, str] = {}
     if not directory.is_dir():
         return entries
     for path in sorted(directory.glob("*.md")):
         text = path.read_text(encoding="utf-8")
-        meta, body = _parse_frontmatter(text)
-        entries[meta["id"]] = {"meta": meta, "body": body}
+        try:
+            meta, body = _parse_frontmatter(text)
+        except StyleCatalogError as e:
+            raise StyleCatalogError(f"{path.name}: {e}") from e
+        entry_id = meta["id"]
+        if entry_id in id_sources:
+            raise StyleCatalogError(
+                f"重複的 id「{entry_id}」：{id_sources[entry_id]} 與 {path.name}"
+            )
+        id_sources[entry_id] = path.name
+        entries[entry_id] = {"meta": meta, "body": body}
     return entries
 
 

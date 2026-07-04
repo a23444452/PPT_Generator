@@ -3,6 +3,7 @@
 import pytest
 
 from app.styles.catalog import (
+    StyleCatalogError,
     clear_cache,
     list_palettes,
     list_styles,
@@ -101,3 +102,48 @@ def test_custom_base_dir_is_isolated_from_default(tmp_path):
     # 預設目錄不受自訂 base_dir 影響
     default_styles = list_styles()
     assert len(default_styles) == 4
+
+
+# ---------- 錯誤處理 ----------
+
+
+def _write_style(directory, filename: str, style_id: str) -> None:
+    (directory / filename).write_text(
+        "---\n"
+        f"id: {style_id}\n"
+        "name_zh: 測試風格\n"
+        "tagline_zh: 測試用\n"
+        "---\n"
+        "內容\n",
+        encoding="utf-8",
+    )
+
+
+def test_duplicate_id_raises(tmp_path):
+    styles_dir = tmp_path / "styles" / "visual"
+    styles_dir.mkdir(parents=True)
+    (tmp_path / "styles" / "palettes").mkdir(parents=True)
+    _write_style(styles_dir, "aaa.md", "dup-style")
+    _write_style(styles_dir, "bbb.md", "dup-style")
+
+    with pytest.raises(StyleCatalogError) as excinfo:
+        list_styles(base_dir=tmp_path)
+    # 訊息需同時含兩個衝突檔名，方便定位
+    assert "aaa.md" in str(excinfo.value)
+    assert "bbb.md" in str(excinfo.value)
+
+
+def test_parse_error_message_includes_filename(tmp_path):
+    styles_dir = tmp_path / "styles" / "visual"
+    styles_dir.mkdir(parents=True)
+    (tmp_path / "styles" / "palettes").mkdir(parents=True)
+    # 缺 name_zh / tagline_zh 的壞檔
+    (styles_dir / "broken.md").write_text(
+        "---\nid: broken\n---\n內容\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(StyleCatalogError) as excinfo:
+        list_styles(base_dir=tmp_path)
+    assert "broken.md" in str(excinfo.value)
+    assert "缺少必要欄位" in str(excinfo.value)
