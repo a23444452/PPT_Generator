@@ -258,6 +258,28 @@ def test_generate_conflict_while_generating_409(client, projects_root):
     assert "生成進行中" in resp.json()["detail"]
 
 
+def test_stale_generating_reset_on_startup(client, projects_root):
+    """process crash 後殘留的 stage=="generating" 要在下次啟動時被清掉，
+    否則 POST /generate 與 PUT /outline 永久 409，中斷續跑無路可走。"""
+    project_id = _setup_project_with_outline(client, "重啟殘留測試")
+
+    # 模擬生成中被 Ctrl-C/OOM 硬中斷：stage 停在 generating
+    project = load_project(projects_root, project_id)
+    project.data["stage"] = "generating"
+    project.save()
+
+    # 重建 TestClient 觸發 lifespan startup sweep（dependency override 仍生效）
+    with TestClient(app) as fresh_client:
+        progress = fresh_client.get(f"/api/projects/{project_id}/progress").json()
+        assert progress["stage"] == "outline"
+        assert "重啟" in progress["last_error"]
+
+        # 可重新生成續跑，不再 409
+        _override_llm([_svg("封面"), _svg("結語")])
+        resp = fresh_client.post(f"/api/projects/{project_id}/generate")
+        assert resp.status_code == 202
+
+
 def test_put_outline_conflict_while_generating_409(client, projects_root):
     project_id = _setup_project_with_outline(client, "生成中編輯測試")
 

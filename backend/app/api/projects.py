@@ -225,6 +225,7 @@ def update_outline_endpoint(
     root: Path = Depends(get_projects_root),
 ) -> dict:
     project = load_project_or_404(root, project_id)
+    # TOCTOU 殘餘風險：讀 stage 與後續寫入間有毫秒級窗口、本層無鎖；單人本地 MVP 接受。
     if project.data["stage"] == "generating":
         raise HTTPException(status_code=409, detail="生成進行中，無法編輯大綱")
 
@@ -312,6 +313,7 @@ def start_generate_endpoint(
     llm: LLMProvider = Depends(get_llm),
 ) -> dict:
     project = load_project_or_404(root, project_id)
+    # TOCTOU 殘餘風險：讀 stage 與下方 save 間有毫秒級窗口、本層無鎖；單人本地 MVP 接受。
     if project.data["stage"] == "generating":
         raise HTTPException(status_code=409, detail="生成進行中，請等待完成")
 

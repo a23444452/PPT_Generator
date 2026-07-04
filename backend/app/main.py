@@ -1,4 +1,6 @@
+import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -6,11 +8,36 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api import router as api_router
-from app.api.deps import get_llm
+from app.api.deps import get_llm, get_projects_root
 from app.config import load_settings
 from app.llm.openai_compat import OpenAICompatLLM
+from app.store.project import ProjectNotFoundError, list_projects, load_project
+
+logger = logging.getLogger(__name__)
 
 _ALLOWED_ORIGINS = ["http://localhost:5173"]
+
+
+def _reset_stale_generating(projects_root: Path) -> None:
+    """啟動時清掉上次 process 中斷殘留的 stage=="generating"。
+
+    生成中若被 Ctrl-C/OOM 硬中斷（非 exception，背景任務兜底捕不到），
+    project.json 會停在 generating，導致 POST /generate 與 PUT /outline
+    永久 409。單 worker 下 startup 時不可能有生成在跑，sweep 安全；
+    重設回 outline 後已生成的頁會被續跑邏輯跳過。壞損專案目錄由
+    list_projects 跳過，個別專案寫入失敗也不阻擋啟動。
+    """
+    for summary in list_projects(projects_root):
+        if summary.stage != "generating":
+            continue
+        try:
+            project = load_project(projects_root, summary.id)
+            project.data["stage"] = "outline"
+            project.data["last_error"] = "生成因伺服器重啟而中斷，可重新生成續跑"
+            project.save()
+            logger.info("已重設中斷殘留的生成狀態（project=%s）", summary.id)
+        except (ProjectNotFoundError, OSError):
+            logger.exception("重設生成狀態失敗，跳過（project=%s）", summary.id)
 
 
 @asynccontextmanager
@@ -22,6 +49,15 @@ async def lifespan(app: FastAPI):
     只有在真正需要呼叫 LLM 端點、且沒有 override 時，get_llm() 的預設
     實作才會呼叫 load_settings() 並在那個當下報錯。
     """
+    # 清掉上次 process 中斷殘留的 generating 狀態。projects root 的取得
+    # 與請求路徑一致：優先用 dependency override（測試指向 tmp_path，
+    # 避免 sweep 掃到開發者的真實 projects/），否則走 get_projects_root
+    # 本體（含 PPT_PROJECTS_DIR 環境變數覆寫）。
+    projects_root_provider = app.dependency_overrides.get(
+        get_projects_root, get_projects_root
+    )
+    _reset_stale_generating(projects_root_provider())
+
     llm: OpenAICompatLLM | None = None
     try:
         settings = load_settings()
