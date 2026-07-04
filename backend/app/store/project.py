@@ -12,6 +12,7 @@ from uuid import uuid4
 
 _SUBDIRS = ("source", "md", "assets", "svg_output", "exports")
 _PROJECT_FILE = "project.json"
+_SLIDE_STATUSES = ("pending", "generated", "failed")
 
 
 class ProjectNotFoundError(Exception):
@@ -31,6 +32,8 @@ class Project:
 
     def __init__(self, root: Path, data: dict):
         self.root = root
+        # data 是刻意設計的可變 dict（先改狀態、後 save()）；
+        # 欄位驗證未來若要加，改點只有此類別。
         self.data = data
 
     @property
@@ -47,9 +50,16 @@ class Project:
         若該 index 尚無紀錄則自動補建（從 pending、retries=0 起算）。
         status 轉為 "failed" 時 retries 累加 1。
         """
+        if index < 0:
+            raise ValueError(f"slide index 不可為負數：{index}")
+        if status not in _SLIDE_STATUSES:
+            raise ValueError(
+                f"無效的 slide status：{status}（允許：{'|'.join(_SLIDE_STATUSES)}）"
+            )
+
         slides = self.data["slides"]
         while len(slides) <= index:
-            slides.append({"status": "pending", "retries": 0})
+            slides.append({"index": len(slides), "status": "pending", "retries": 0})
 
         slide = slides[index]
         slide["status"] = status
@@ -57,7 +67,10 @@ class Project:
             slide["retries"] = slide.get("retries", 0) + 1
 
     def save(self) -> None:
-        """原子寫入 project.json（tmp 檔 + os.replace）。"""
+        """原子寫入 project.json（tmp 檔 + os.replace）。
+
+        本層不提供鎖，同一專案的寫入順序由呼叫端保證（generation 為循序迴圈）。
+        """
         project_file = self.path / _PROJECT_FILE
         try:
             tmp_path = self.path / f".{_PROJECT_FILE}.{uuid4().hex}.tmp"

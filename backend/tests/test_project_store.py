@@ -59,6 +59,29 @@ def test_set_slide_status_creates_missing_index_as_pending_first(tmp_path):
     assert slides[0]["retries"] == 0
 
 
+def test_slides_have_index_field(tmp_path):
+    p = create_project(tmp_path, "idx")
+    p.set_slide_status(2, "generated")
+    assert [s["index"] for s in p.data["slides"]] == [0, 1, 2]
+    # 更新既有項目時 index 不變
+    p.set_slide_status(1, "failed")
+    assert p.data["slides"][1]["index"] == 1
+
+
+def test_set_slide_status_negative_index_raises(tmp_path):
+    p = create_project(tmp_path, "neg")
+    with pytest.raises(ValueError, match="-1"):
+        p.set_slide_status(-1, "generated")
+    assert p.data["slides"] == []
+
+
+def test_set_slide_status_invalid_status_raises(tmp_path):
+    p = create_project(tmp_path, "bad")
+    with pytest.raises(ValueError, match="oops"):
+        p.set_slide_status(0, "oops")
+    assert p.data["slides"] == []
+
+
 def test_set_slide_status_non_failed_does_not_increment_retries(tmp_path):
     p = create_project(tmp_path, "z")
     p.set_slide_status(0, "failed")
