@@ -20,6 +20,9 @@ from app.ingest._table_md import rows_to_markdown_table
 from app.ingest.dispatcher import IngestError, IngestResult
 from app.store.project import Project
 
+# 已知限制：只認英文內建樣式名 "Heading N"。本地化樣式名（如「標題 1」）
+# 與使用者自訂標題樣式不會被判為標題，會以一般段落輸出；
+# Phase 2 可改為比對 style_id（不隨 UI 語言變動）放寬。
 _HEADING_RE = re.compile(r"^Heading (\d+)$")
 
 

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
+from app.ingest._table_md import escape_cell
 from app.ingest.dispatcher import IngestError, IngestResult
 from app.store.project import Project
 
@@ -18,12 +19,15 @@ _TRUNCATED_NOTE = "（表格過大，已截斷：僅保留前 {rows} 列 × {col
 
 
 def _format_cell(value) -> str:
-    """儲存格值轉字串：None 補空、int 保持整數、避免 42 變 42.0。"""
+    """儲存格值轉字串：None 補空、int 保持整數、避免 42 變 42.0。
+
+    轉義（`|`、換行）委派給共用的 _table_md.escape_cell，規則單一來源。
+    """
     if value is None:
         return ""
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
-    return str(value).replace("|", "\\|").replace("\r", " ").replace("\n", " ")
+    return escape_cell(str(value))
 
 
 def _sheet_to_markdown(ws) -> tuple[str, list[str]]:

@@ -29,8 +29,12 @@ class IngestResult:
     extra_assets: tuple[Path, ...] = ()
 
 
-def _unique_dest(directory: Path, filename: str) -> Path:
-    """同名檔案不覆蓋：chart.png → chart-1.png → chart-2.png …"""
+def unique_dest(directory: Path, filename: str) -> Path:
+    """同名檔案不覆蓋：chart.png → chart-1.png → chart-2.png …
+
+    app.ingest 內部共用工具：dispatcher 的 asset 複製與各 converter
+    （如 pdf_converter 抽圖）皆透過本函式取得不衝突的目的路徑。
+    """
     dest = directory / filename
     if not dest.exists():
         return dest
@@ -46,7 +50,7 @@ def _unique_dest(directory: Path, filename: str) -> Path:
 def _copy_asset(src: Path, project: Project) -> IngestResult:
     """圖片複製到 assets/，同名加序號避免覆蓋。"""
     assets_dir = project.path / "assets"
-    dest = _unique_dest(assets_dir, src.name)
+    dest = unique_dest(assets_dir, src.name)
     try:
         shutil.copy2(src, dest)
     except OSError as exc:

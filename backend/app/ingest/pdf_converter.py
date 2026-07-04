@@ -12,7 +12,7 @@ from pathlib import Path
 
 import fitz
 
-from app.ingest.dispatcher import IngestError, IngestResult, _unique_dest
+from app.ingest.dispatcher import IngestError, IngestResult, unique_dest
 from app.store.project import Project
 
 # 字級 ≥ 頁面最常見字級 × 此倍率 → 視為標題
@@ -96,7 +96,7 @@ def _extract_images(
             counter += 1
             ext = info.get("ext", "png")
             filename = f"{stem}_img{counter}.{ext}"
-            dest = _unique_dest(assets_dir, filename)
+            dest = unique_dest(assets_dir, filename)
             try:
                 dest.write_bytes(data)
             except OSError as exc:
