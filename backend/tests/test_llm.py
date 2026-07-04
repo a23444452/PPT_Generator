@@ -207,6 +207,31 @@ def test_connection_error_retries_then_network_error():
     assert sleeps == [1, 2]
 
 
+def test_close_closes_underlying_client():
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200, json={"choices": [{"message": {"content": "ok"}}]}
+        )
+    )
+    llm = _make_llm(transport)
+
+    llm.close()
+
+    assert llm._client.is_closed
+
+
+def test_context_manager_closes_client():
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200, json={"choices": [{"message": {"content": "ok"}}]}
+        )
+    )
+    with _make_llm(transport) as llm:
+        assert llm.complete([{"role": "user", "content": "hi"}]) == "ok"
+
+    assert llm._client.is_closed
+
+
 def test_error_message_does_not_leak_url():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"error": "invalid api key"})

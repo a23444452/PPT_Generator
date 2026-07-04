@@ -11,10 +11,20 @@ from app.llm.base import LLMError
 
 _MAX_ATTEMPTS = 3
 _TIMEOUT_SECONDS = 120.0
+_DEFAULT_MAX_TOKENS = 4096
 
 
 class OpenAICompatLLM:
-    """透過 OpenAI-compatible `/chat/completions` 端點呼叫 LLM。"""
+    """透過 OpenAI-compatible `/chat/completions` 端點呼叫 LLM。
+
+    預期用法：長生命週期物件重用——在 app 層建一個 singleton，
+    所有請求共用同一實例（底層 httpx.Client 連線池），
+    在 app shutdown 時呼叫 `close()`；不要每次呼叫都 new 一個。
+    短生命週期場景（腳本、測試）可用 context manager：
+
+        with OpenAICompatLLM(base_url=..., api_key=..., model=...) as llm:
+            llm.complete([...])
+    """
 
     def __init__(
         self,
@@ -30,8 +40,18 @@ class OpenAICompatLLM:
         self._sleep_fn = sleep_fn
         self._client = httpx.Client(transport=transport, timeout=_TIMEOUT_SECONDS)
 
+    def close(self) -> None:
+        """關閉底層 httpx.Client（釋放連線池）。"""
+        self._client.close()
+
+    def __enter__(self) -> "OpenAICompatLLM":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
+
     def complete(
-        self, messages: list[dict], system: str = "", max_tokens: int = 4096
+        self, messages: list[dict], system: str = "", max_tokens: int = _DEFAULT_MAX_TOKENS
     ) -> str:
         full_messages = list(messages)
         if system:
@@ -78,7 +98,8 @@ class OpenAICompatLLM:
 
             return self._parse_content(response)
 
-        # 理論上不會到這裡（迴圈內每個分支都會 return 或 raise）
+        # unreachable 安全網：迴圈每個分支都 return/raise/continue；
+        # 若未來新增分支漏寫，這裡會以 network kind 吃掉錯誤，維護時注意
         raise LLMError("呼叫 LLM 服務失敗，請稍後再試", kind=last_kind)
 
     @staticmethod
