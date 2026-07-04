@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# 環境設定與金鑰
+.env
+config.toml
+
+# 使用者專案資料（本機產出，不進版控）
+projects/
+
+# macOS
+.DS_Store
+
+# 前端
+node_modules/
+dist/
