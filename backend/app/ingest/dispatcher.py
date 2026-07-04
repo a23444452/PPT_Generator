@@ -28,6 +28,9 @@ class IngestResult:
     output_type: str  # "markdown" | "asset"
     output_path: Path
     warnings: list[str] = field(default_factory=list)
+    # 一對多輸出承載欄位：如 PDF converter（Task 4）一個來源檔
+    # 產出 1 個 md ＋ N 張抽取圖片時，圖片路徑放這裡。
+    extra_assets: tuple[Path, ...] = ()
 
 
 def _unique_dest(directory: Path, filename: str) -> Path:

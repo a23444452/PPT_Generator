@@ -23,7 +23,7 @@ def _format_cell(value) -> str:
         return ""
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
-    return str(value).replace("|", "\\|").replace("\n", " ")
+    return str(value).replace("|", "\\|").replace("\r", " ").replace("\n", " ")
 
 
 def _sheet_to_markdown(ws) -> tuple[str, list[str]]:

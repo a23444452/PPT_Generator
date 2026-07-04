@@ -60,11 +60,9 @@ def test_unsupported_error_is_ingest_error():
 def test_docx_planned_but_not_yet_supported(tmp_path, project):
     src = tmp_path / "doc.docx"
     src.write_bytes(b"PK")
-    with pytest.raises(IngestError, match="尚未支援"):
+    with pytest.raises(IngestError, match="尚未支援") as excinfo:
         ingest_file(src, project)
     # 已規劃格式不應被歸類為「不支援的副檔名」
-    with pytest.raises(IngestError) as excinfo:
-        ingest_file(src, project)
     assert not isinstance(excinfo.value, UnsupportedFormatError)
 
 
@@ -101,6 +99,24 @@ def test_txt_treated_as_markdown(tmp_path, project):
     assert result.output_type == "markdown"
     assert result.output_path == project.path / "md" / "memo.txt.md"
     assert result.output_path.read_text(encoding="utf-8") == "純文字內容\n"
+
+
+def test_md_ingest_rejects_non_utf8(tmp_path, project):
+    src = tmp_path / "legacy.md"
+    src.write_bytes("Big5 編碼內容".encode("big5"))
+    with pytest.raises(IngestError) as excinfo:
+        ingest_file(src, project)
+    msg = str(excinfo.value)
+    assert "legacy.md" in msg
+    assert "UTF-8" in msg
+    assert "Traceback" not in msg
+
+
+def test_ingest_result_extra_assets_defaults_to_empty_tuple(tmp_path, project):
+    src = tmp_path / "notes.md"
+    src.write_text("內容\n", encoding="utf-8")
+    result = ingest_file(src, project)
+    assert result.extra_assets == ()
 
 
 # ---------- excel ----------
@@ -141,6 +157,13 @@ def test_xlsx_truncates_over_limit(tmp_path, project):
     # 行數不超過上限（header 分隔線與標題、註記除外）
     table_rows = [line for line in md.splitlines() if line.startswith("|")]
     assert len(table_rows) <= MAX_ROWS + 1  # +1 為分隔線
+
+
+def test_format_cell_strips_carriage_returns():
+    from app.ingest.excel_converter import _format_cell
+
+    assert _format_cell("第一行\r\n第二行") == "第一行  第二行"
+    assert _format_cell("尾端\r") == "尾端 "
 
 
 def test_corrupt_xlsx_raises_friendly_ingest_error(tmp_path, project):
