@@ -1,8 +1,4 @@
-"""Ingest 分派器：依副檔名把來源檔轉成 markdown 或複製為資產。
-
-docx/pdf 已列入 SUPPORTED（規劃中的格式），但 converter 於後續 task
-註冊；遇到時拋出明確的「尚未支援」錯誤，而非 UnsupportedFormatError。
-"""
+"""Ingest 分派器：依副檔名把來源檔轉成 markdown 或複製為資產。"""
 
 import shutil
 from dataclasses import dataclass, field
@@ -72,12 +68,25 @@ def _convert_excel(src: Path, project: Project) -> IngestResult:
     return convert_excel(src, project)
 
 
-# 註冊表：.docx / .pdf 於 Task 4 註冊 converter，本階段刻意缺席。
+def _convert_docx(src: Path, project: Project) -> IngestResult:
+    from app.ingest.docx_converter import convert_docx
+
+    return convert_docx(src, project)
+
+
+def _convert_pdf(src: Path, project: Project) -> IngestResult:
+    from app.ingest.pdf_converter import convert_pdf
+
+    return convert_pdf(src, project)
+
+
 _CONVERTERS: dict[str, Callable[[Path, Project], IngestResult]] = {
     ".md": _convert_markdown,
     ".txt": _convert_markdown,
     ".xlsx": _convert_excel,
     ".xlsm": _convert_excel,
+    ".docx": _convert_docx,
+    ".pdf": _convert_pdf,
     ".png": _copy_asset,
     ".jpg": _copy_asset,
     ".jpeg": _copy_asset,

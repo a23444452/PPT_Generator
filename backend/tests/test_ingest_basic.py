@@ -57,20 +57,22 @@ def test_unsupported_error_is_ingest_error():
     assert issubclass(UnsupportedFormatError, IngestError)
 
 
-def test_docx_planned_but_not_yet_supported(tmp_path, project):
+def test_docx_corrupt_file_raises_ingest_error_not_unsupported(tmp_path, project):
+    """.docx 已於 Task 4 支援：損壞檔案應是友善 IngestError，而非「不支援副檔名」。"""
     src = tmp_path / "doc.docx"
     src.write_bytes(b"PK")
-    with pytest.raises(IngestError, match="尚未支援") as excinfo:
+    with pytest.raises(IngestError) as excinfo:
         ingest_file(src, project)
-    # 已規劃格式不應被歸類為「不支援的副檔名」
     assert not isinstance(excinfo.value, UnsupportedFormatError)
 
 
-def test_pdf_planned_but_not_yet_supported(tmp_path, project):
+def test_pdf_corrupt_file_raises_ingest_error_not_unsupported(tmp_path, project):
+    """.pdf 已於 Task 4 支援：損壞檔案應是友善 IngestError，而非「不支援副檔名」。"""
     src = tmp_path / "paper.pdf"
     src.write_bytes(b"%PDF")
-    with pytest.raises(IngestError, match="尚未支援"):
+    with pytest.raises(IngestError) as excinfo:
         ingest_file(src, project)
+    assert not isinstance(excinfo.value, UnsupportedFormatError)
 
 
 # ---------- markdown / txt ----------
