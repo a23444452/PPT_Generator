@@ -51,5 +51,24 @@ SOFTWARE.
 （`id` / `name_zh` / `tagline_zh`），用於本專案 GUI 的風格卡片顯示；
 frontmatter 以下的原始內容（英文規則文件）逐字保留，未經翻譯或改寫。
 
-（未來 Task 9 將 vendor 同一 repo 的 svg_to_pptx 工具，屆時本檔案將一併
-補充其來源與修改說明。）
+以下目錄／檔案取自 ppt-master 的 `skills/ppt-master/scripts/`，原封不動
+複製、未經任何修改（升級時可整包替換）：
+
+- `vendor/svg_to_pptx/`：SVG → PPTX 原生 DrawingML 轉換器本體
+  （對應原始碼 `scripts/svg_to_pptx/`）。
+- `vendor/console_encoding.py`（對應 `scripts/console_encoding.py`）、
+  `vendor/resource_paths.py`（對應 `scripts/resource_paths.py`）、
+  `vendor/svg_finalize/`（對應 `scripts/svg_finalize/`）：這三者是
+  `svg_to_pptx` 原始碼以「裸模組名」（非相對匯入）直接依賴的 sibling
+  模組（`drawingml/converter.py`、`drawingml/elements.py` 匯入
+  `resource_paths`；`tspan_flattener.py` lazy-import
+  `svg_finalize.flatten_tspan`；`svg_finalize` 本身依賴
+  `console_encoding`）。因為不修改 vendor 內部檔案，這三者原封不動
+  一併複製到 vendor/ 根目錄，與 `svg_to_pptx/` 同層，供 Python 匯入時
+  解析。
+
+本專案 `backend/app/export/pptx_export.py` 是薄 adapter：把 vendor
+`svg_to_pptx` 的逐頁轉換函式（`drawingml.converter.convert_svg_to_slide_shapes`）
+與少量 pptx 組裝 helper（`pptx_package.builder` 內的
+`_create_writable_work_dir` 等）組合成「單頁失敗可降級、不中止其餘頁」
+的匯出流程；未修改 vendor 原始碼任何一行。
