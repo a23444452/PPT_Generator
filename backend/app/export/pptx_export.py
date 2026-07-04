@@ -57,6 +57,7 @@ Vendor 耦合與 adapter 範圍（不修改 vendor 內部檔案）：
 from __future__ import annotations
 
 import re
+import shutil
 import sys
 import zipfile
 from dataclasses import dataclass, field
@@ -187,8 +188,6 @@ def export_pptx(project: Project) -> ExportResult:
             skipped_count=len(svg_paths) - slides_written,
         )
     finally:
-        import shutil
-
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 

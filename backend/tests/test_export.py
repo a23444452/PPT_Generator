@@ -124,16 +124,31 @@ def test_output_filename_timestamp_and_sanitized_name(tmp_path):
 
 
 def test_image_href_escaping_project_root_is_skipped_with_warning(tmp_path):
+    # 在 project.path 之外放一個「真實存在」的檔案：候選路徑 resolve 後
+    # 確實存在，防護必須靠 relative_to(project_root) 的 ValueError 分支
+    # 才擋得下來。若有人刪掉該段防護，這個測試會確定性地轉紅（不像指向
+    # 不存在路徑的 href，那只會命中「候選不存在」分支，防護刪了照樣綠）。
+    outside_file = tmp_path / "outside.txt"
+    outside_file.write_bytes(b"\x89PNG fake-but-real-file")
+
     project = create_project(tmp_path, "href逃逸")
     svg_dir = project.path / "svg_output"
     svg_dir.mkdir(parents=True, exist_ok=True)
+    # 佈局為 tmp_path/<project_id>/svg_output/，因此從 svg_output/ 走
+    # ../../outside.txt 剛好落在 tmp_path/outside.txt（project.path 之外）。
     escaping_svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">
-<image href="../../../../../../etc/hosts" x="0" y="0" width="100" height="100"/>
+<image href="../../outside.txt" x="0" y="0" width="100" height="100"/>
 <text x="20" y="60" font-size="24">安全測試頁</text>
 </svg>"""
     (svg_dir / "slide_000.svg").write_text(escaping_svg, encoding="utf-8")
     project.set_slide_status(0, "generated")
     project.save()
+
+    # 前置驗證：這個 href 的候選路徑確實存在且在專案外——確保測試打到
+    # relative_to 分支，而不是「檔案不存在」分支。
+    resolved = (svg_dir / "../../outside.txt").resolve()
+    assert resolved.is_file()
+    assert not resolved.is_relative_to(project.path.resolve())
 
     result = export_pptx(project)
 
@@ -141,6 +156,22 @@ def test_image_href_escaping_project_root_is_skipped_with_warning(tmp_path):
     # 而不是讓匯出動作讀取到專案目錄之外的檔案內容。
     assert result.exported_count == 1
     assert len(result.warnings) == 1
-    assert "etc/hosts" in result.warnings[0]
+    assert "outside.txt" in result.warnings[0]
     prs = Presentation(str(result.output_path))
     assert len(prs.slides) == 1
+
+
+def test_vendor_private_symbols_still_importable():
+    """vendor 升級相容性 smoke test：adapter 依賴的 vendor 符號若被改名，
+    這裡會直接 ImportError／AssertionError 轉紅，訊息明確指向 vendor 介面變動。"""
+    from svg_to_pptx.drawingml.converter import convert_svg_to_slide_shapes
+    from svg_to_pptx.pptx_package.builder import (
+        _add_default_content_type,
+        _content_type_for_extension,
+        _create_writable_work_dir,
+    )
+
+    assert callable(convert_svg_to_slide_shapes)
+    assert callable(_add_default_content_type)
+    assert callable(_content_type_for_extension)
+    assert callable(_create_writable_work_dir)
