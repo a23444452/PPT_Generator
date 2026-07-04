@@ -28,8 +28,10 @@ _CJK_PATTERN = re.compile(
     "]"
 )
 
-_FONT_SIZE_ATTR_RE = re.compile(r"^\s*([0-9.]+)")
-_FONT_SIZE_STYLE_RE = re.compile(r"font-size\s*:\s*([0-9.]+)")
+# 收緊為「整數或單一小數點」且錨定結尾（僅允許可選 px 單位），
+# 讓 "40.5.5px" 這類畸形值整體匹配失敗而走 fallback，而非部分解析。
+_FONT_SIZE_ATTR_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(?:px)?\s*$")
+_FONT_SIZE_STYLE_RE = re.compile(r"font-size\s*:\s*(\d+(?:\.\d+)?)\s*(?:px)?\s*(?:;|$)")
 
 
 def check_svg(svg_text: str) -> list[str]:
@@ -90,18 +92,29 @@ def _viewbox_width(root: ET.Element) -> float:
 
 
 def _parse_font_size(elem: ET.Element, inherited: float) -> float:
-    """取得元素自身的 font-size；取不到則回傳繼承值（外層已含預設值 fallback）。"""
+    """取得元素自身的 font-size；取不到或無法解析則回傳繼承值（與 _parse_x 行為對稱）。
+
+    已知限制：僅支援純數字＋可選 px 單位（"24"、"24px"、"24.5px"）；
+    em/%/科學記號等其他寫法會匹配失敗而走 fallback（inherited/預設值）。
+    輸入來自不可信的 LLM 輸出，任何畸形值都不得拋例外。
+    """
     attr = elem.get("font-size")
     if attr is not None:
         match = _FONT_SIZE_ATTR_RE.match(attr.strip())
         if match:
-            return float(match.group(1))
+            try:
+                return float(match.group(1))
+            except ValueError:
+                pass  # 防禦性保底：regex 已保證格式，仍不讓畸形值炸掉檢查
 
     style = elem.get("style")
     if style:
         match = _FONT_SIZE_STYLE_RE.search(style)
         if match:
-            return float(match.group(1))
+            try:
+                return float(match.group(1))
+            except ValueError:
+                pass
 
     return inherited
 
@@ -189,6 +202,8 @@ def _check_image_href(root: ET.Element) -> list[str]:
 
 
 def _is_allowed_href(href: str) -> bool:
+    """格式白名單檢查（assets/ 前綴或 data URI），非路徑安全邊界；
+    任何實際讀檔的消費者（如 Task 9 匯出）必須自行做路徑正規化。"""
     href = href.strip()
     if href.startswith("data:"):
         return True

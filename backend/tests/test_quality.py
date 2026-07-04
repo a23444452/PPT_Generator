@@ -122,6 +122,33 @@ def test_font_size_from_style_attribute_is_parsed():
     assert "超出右緣" in problems[0]
 
 
+def test_malformed_font_size_attr_does_not_crash_and_falls_back():
+    """font-size="40.5.5px" 這類畸形值（LLM 輸出不可信）不可讓 check_svg 崩潰。
+
+    應 fallback 到預設 16：本例若誤解析為 40.5 會判定溢出（x=800 + 28字*0.6*40.5 ≈ 1480），
+    以 fallback 16 計算則不溢出（800 + 28*0.6*16 ≈ 1069），故斷言結果為空即證明走了 fallback。
+    """
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="{EXPECTED_VIEWBOX}">
+  <text x="800" y="100" font-size="40.5.5px">abcdefghijklmnopqrstuvwxyz12</text>
+</svg>"""
+    assert check_svg(svg) == []
+
+
+def test_malformed_font_size_in_style_does_not_crash_and_falls_back():
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="{EXPECTED_VIEWBOX}">
+  <text x="800" y="100" style="font-size:40.5.5px;fill:#000">abcdefghijklmnopqrstuvwxyz12</text>
+</svg>"""
+    assert check_svg(svg) == []
+
+
+def test_unparseable_font_size_attr_falls_back_to_inherited():
+    """attr 存在但完全無法解析（如 "abc"）→ fallback，與 _parse_x 行為對稱。"""
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="{EXPECTED_VIEWBOX}">
+  <text x="800" y="100" font-size="abc">abcdefghijklmnopqrstuvwxyz12</text>
+</svg>"""
+    assert check_svg(svg) == []
+
+
 def test_cjk_text_estimated_as_full_width():
     # 10 個中文字 * font-size 40（全寬 1 倍）= 400，x=900 => 1300 > 1280 溢出
     svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="{EXPECTED_VIEWBOX}">
