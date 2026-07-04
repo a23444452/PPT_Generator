@@ -7,7 +7,7 @@ import pytest
 from app.generation.quality import EXPECTED_VIEWBOX
 from app.generation.slides import generate_slides
 from app.llm.base import LLMError
-from app.store.project import create_project
+from app.store.project import create_project, load_project
 from tests.conftest import FakeLLM
 
 OUTLINE = {
@@ -268,7 +268,71 @@ def test_previous_slide_summary_included_in_next_prompt(tmp_path):
     first_prompt = llm.calls[0]["messages"][0]["content"]
     assert "前一頁" not in first_prompt
 
-    # 第 1 頁 prompt 內含前一頁（第 0 頁）的標題與主色摘要
+    # 第 1 頁 prompt 內含前一頁（第 0 頁）的標題與代表色摘要
     second_prompt = llm.calls[1]["messages"][0]["content"]
     assert "封面：Q2 營運回顧" in second_prompt
     assert "#abcdef" in second_prompt
+
+
+def test_representative_fill_prefers_background_rect_over_first_fill(tmp_path):
+    """代表色啟發式：覆蓋整個 viewBox 的背景 rect 的 fill 應被選中，
+    而非文件中第一個著色的裝飾元素。"""
+    project = _make_project(tmp_path)
+    # 裝飾元素（circle，fill 在前）→ 背景 rect（覆蓋整頁）→ 文字
+    svg_decor_first = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{EXPECTED_VIEWBOX}">'
+        f'<circle cx="50" cy="50" r="10" fill="#ff0000"/>'
+        f'<rect x="0" y="0" width="1280" height="720" fill="#0a2540"/>'
+        f'<text x="40" y="100" font-size="24">封面：Q2 營運回顧</text>'
+        f"</svg>"
+    )
+    llm = FakeLLM(
+        [
+            _fence(svg_decor_first),
+            _fence(_valid_svg("營收概況")),
+            _fence(_valid_svg("結語")),
+        ]
+    )
+
+    generate_slides(llm, project)
+
+    second_prompt = llm.calls[1]["messages"][0]["content"]
+    assert "#0a2540" in second_prompt
+    assert "#ff0000" not in second_prompt
+
+
+def test_resume_across_save_and_reload(tmp_path):
+    """跨 process 續跑：第一輪只生成第 0 頁後中斷，從磁碟重讀 project
+    再呼叫 generate_slides，應只為第 1、2 頁呼叫 LLM。"""
+    project = _make_project(tmp_path)
+
+    # 第一輪：只準備 1 個回應，第 1 頁呼叫 LLM 時 pop 空清單 → IndexError，
+    # 模擬跑到一半 process 掛掉（第 0 頁已寫檔並落盤 project.json）。
+    first_llm = FakeLLM([_fence(_valid_svg("封面：Q2 營運回顧"))])
+    with pytest.raises(IndexError):
+        generate_slides(first_llm, project)
+
+    assert len(first_llm.calls) == 2  # 第 0 頁成功 + 第 1 頁呼叫時中斷
+    assert (project.path / "svg_output" / "slide_000.svg").is_file()
+
+    # 第二輪：從磁碟重讀 project（模擬新 process），只應為第 1、2 頁呼叫 LLM
+    reloaded = load_project(tmp_path, project.id)
+    assert reloaded.data["slides"][0]["status"] == "generated"
+
+    second_llm = FakeLLM(
+        [
+            _fence(_valid_svg("營收概況")),
+            _fence(_valid_svg("結語")),
+        ]
+    )
+    generate_slides(second_llm, reloaded)
+
+    assert len(second_llm.calls) == 2
+    assert [s["status"] for s in reloaded.data["slides"]] == [
+        "generated",
+        "generated",
+        "generated",
+    ]
+    assert reloaded.data["stage"] == "generated"
+    for i in range(3):
+        assert (reloaded.path / "svg_output" / f"slide_{i:03d}.svg").is_file()

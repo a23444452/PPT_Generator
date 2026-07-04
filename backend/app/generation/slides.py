@@ -16,11 +16,13 @@
 狀態的頁會被跳過，只處理 pending／failed 的頁。
 """
 
+import json
 import os
 import re
 from collections.abc import Callable
 from pathlib import Path
 from uuid import uuid4
+from xml.etree import ElementTree as ET
 
 from app.generation.quality import EXPECTED_VIEWBOX, check_svg
 from app.llm.base import LLMProvider
@@ -196,13 +198,80 @@ def _build_retry_prompt(base_prompt: str, last_svg_text: str, problems: list[str
 
 _FILL_RE = re.compile(r'fill\s*=\s*"([^"]+)"')
 
+# viewBox "0 0 1280 720" 的寬高，用於判定「覆蓋整頁的背景 rect」。
+_VIEWBOX_WIDTH, _VIEWBOX_HEIGHT = EXPECTED_VIEWBOX.split()[2:4]
+
 
 def _build_summary(slide: dict, svg_text: str) -> str:
+    """組「前一頁的代表色（背景或首個著色元素）」摘要句供下一頁 prompt 使用。"""
     title = slide["title"]
+    color = _representative_fill(svg_text)
+    if color is not None:
+        return f"前一頁標題為「{title}」，代表色（背景或首個著色元素）為 {color}。"
+    return f"前一頁標題為「{title}」。"
+
+
+def _representative_fill(svg_text: str) -> str | None:
+    """取前一頁的代表色：優先找覆蓋整個 viewBox 的背景 <rect> 的 fill；
+    找不到才退回文件中第一個 fill（首個著色元素）。啟發式，抓不到回 None。
+    """
+    background_fill = _background_rect_fill(svg_text)
+    if background_fill is not None:
+        return background_fill
+
     fill_match = _FILL_RE.search(svg_text)
     if fill_match:
-        return f"前一頁標題為「{title}」，主色為 {fill_match.group(1)}。"
-    return f"前一頁標題為「{title}」。"
+        return fill_match.group(1)
+    return None
+
+
+def _background_rect_fill(svg_text: str) -> str | None:
+    """找第一個覆蓋整個 viewBox 的 <rect>（x/y 為 0 或缺省、width/height
+    等於 viewBox 寬高或 100%）並回傳其 fill；輸入來自 LLM，解析失敗回 None。
+    """
+    try:
+        root = ET.fromstring(svg_text)
+    except ET.ParseError:
+        return None
+
+    for elem in root.iter():
+        tag = elem.tag.split("}", 1)[-1]  # 去除 namespace 前綴
+        if tag != "rect":
+            continue
+        if not _covers_full_viewbox(elem):
+            continue
+        fill = elem.get("fill")
+        if fill:
+            return fill
+    return None
+
+
+def _covers_full_viewbox(rect: ET.Element) -> bool:
+    def _is_zero(value: str | None) -> bool:
+        if value is None:
+            return True
+        try:
+            return float(value.strip()) == 0.0
+        except ValueError:
+            return False
+
+    def _is_full(value: str | None, expected: str) -> bool:
+        if value is None:
+            return False
+        value = value.strip()
+        if value == "100%":
+            return True
+        try:
+            return float(value) == float(expected)
+        except ValueError:
+            return False
+
+    return (
+        _is_zero(rect.get("x"))
+        and _is_zero(rect.get("y"))
+        and _is_full(rect.get("width"), _VIEWBOX_WIDTH)
+        and _is_full(rect.get("height"), _VIEWBOX_HEIGHT)
+    )
 
 
 def _summary_from_existing(svg_output_dir: Path, slide: dict) -> str | None:
@@ -263,8 +332,6 @@ def _atomic_write_text(target: Path, text: str) -> None:
 
 
 def _load_outline(project_path: Path) -> dict:
-    import json
-
     raw = (project_path / "outline.json").read_text(encoding="utf-8")
     return json.loads(raw)
 
