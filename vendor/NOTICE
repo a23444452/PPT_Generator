@@ -1,0 +1,55 @@
+本專案 vendor 部分內容改編自第三方專案 ppt-master：
+
+Source repository: https://github.com/hugohe3/ppt-master
+License: MIT License
+Copyright (c) 2025-2026 Hugo He
+
+---
+
+MIT License
+
+Copyright (c) 2025-2026 Hugo He
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+## 引用範圍與本專案的修改
+
+以下檔案取自 ppt-master 的
+`skills/ppt-master/references/visual-styles/` 與
+`skills/ppt-master/references/image-palettes/`：
+
+視覺風格（`styles/visual/`）：
+- swiss-minimal.md
+- soft-rounded.md
+- dark-tech.md
+- editorial.md
+
+色盤（`styles/palettes/`）：
+- cool-corporate.md
+- editorial-classic.md
+- mono-ink.md
+
+本專案對上述每個檔案的修改：僅在檔案頂部加入一段 YAML frontmatter
+（`id` / `name_zh` / `tagline_zh`），用於本專案 GUI 的風格卡片顯示；
+frontmatter 以下的原始內容（英文規則文件）逐字保留，未經翻譯或改寫。
+
+（未來 Task 9 將 vendor 同一 repo 的 svg_to_pptx 工具，屆時本檔案將一併
+補充其來源與修改說明。）
