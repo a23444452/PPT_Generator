@@ -4,7 +4,7 @@
 
 ## 功能特色（五步流程）
 
-1. **上傳文件**：支援 `.md`／`.txt`／`.docx`／`.pdf`／`.xlsx`，自動轉換為 Markdown 作為生成素材；文件內的圖片會抽取到專案 `assets/` 目錄供後續引用。
+1. **上傳文件**：支援 `.md`／`.txt`／`.docx`／`.pdf`／`.xlsx`／`.xlsm`，自動轉換為 Markdown 作為生成素材；也可直接上傳圖片（`.png`／`.jpg`／`.jpeg`）進專案素材庫，文件內嵌的圖片會抽取到專案 `assets/` 目錄供後續引用。
 2. **選擇風格與色盤**：從內建視覺風格（如 swiss-minimal、soft-rounded、dark-tech、editorial）與色盤中挑選一組，決定整份簡報的視覺語言。
 3. **產生大綱**：LLM 根據上傳內容與所選風格，生成分頁大綱（標題／條列重點／版型提示），使用者可在前端編輯後再送出。
 4. **逐頁生成 SVG**：後端依大綱逐頁呼叫 LLM 產生 SVG 投影片，並跑品質檢查（尺寸、文字溢出、外部資源引用）；不通過會自動帶著問題清單重生一次，仍失敗則該頁標記失敗但不中斷其餘頁面。
@@ -27,12 +27,21 @@
 | `LLM_MODEL` | 是 | 呼叫的模型名稱（例如 `gpt-4o`） |
 | `PPT_PROJECTS_DIR` | 否 | 專案資料存放目錄，預設為 repo 根目錄下的 `projects/` |
 
-設定範例（`backend/.env` 或直接 export）：
+設定範例（**直接在 shell export 或寫入 `~/.zshrc`**；注意：後端不會自動載入 `.env` 檔，把變數寫在 `.env` 是無效的）：
 
 ```bash
-export LLM_BASE_URL="https://api.openai.com/v1"
+export LLM_BASE_URL="https://api.openai.com/v1"   # 公司 gateway 則填其 base URL（不含 /chat/completions）
 export LLM_API_KEY="sk-..."
 export LLM_MODEL="gpt-4o"
+```
+
+## 首次安裝
+
+```bash
+git clone https://github.com/a23444452/PPT_Generator.git
+cd PPT_Generator
+cd backend && uv sync          # 建立虛擬環境並安裝後端依賴
+cd ../frontend && npm install  # 安裝前端依賴
 ```
 
 ## 啟動方式
@@ -98,3 +107,13 @@ PPT_Generator/
 ```bash
 cd backend && uv run pytest -v
 ```
+
+## 專案狀態與相關文件
+
+Phase 1 MVP 已完成（2026-07-05）；範例 PPT 風格萃取、場景問答推薦、嚴格套版模式屬 Phase 2，尚未開工。
+
+| 文件 | 內容 |
+|---|---|
+| [`CLAUDE.md`](CLAUDE.md) | 開發交接指引：驗收流程、開發慣例、架構速覽、Phase 2 入口 |
+| [`docs/superpowers/specs/2026-07-04-ppt-generator-design.md`](docs/superpowers/specs/2026-07-04-ppt-generator-design.md) | 完整設計規格（Phase 1–3） |
+| [`docs/phase2-backlog.md`](docs/phase2-backlog.md) | Phase 2 待辦清單（功能債／技術債／測試債） |
